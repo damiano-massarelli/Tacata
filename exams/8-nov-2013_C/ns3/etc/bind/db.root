@@ -1,0 +1,6 @@
+. IN SOA ns3. root.ns3. 1 2 3 4 5
+. IN NS ns3.
+ns3. IN A 110.0.0.3
+
+name. IN NS ns2.name.
+ns2.name. IN A 110.0.0.2
