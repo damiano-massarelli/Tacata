@@ -1,6 +1,0 @@
-name. IN SOA ns2.name. root.ns2.name. 1 2 3 4 5
-name. IN NS ns2.name.
-ns2.name. IN A 110.0.0.2
-
-server.name. IN A 130.0.0.2
-server.name. IN A 120.0.0.2

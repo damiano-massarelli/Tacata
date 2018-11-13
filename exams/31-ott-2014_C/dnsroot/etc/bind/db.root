@@ -1,6 +1,0 @@
-. IN SOA dnsroot. root.dnsroot. 1 2 3 4 5
-. IN NS dnsroot.
-dnsroot. IN A 1.2.0.2
-
-com. IN NS dnscom.com.
-dnscom.com. IN A 1.1.0.3

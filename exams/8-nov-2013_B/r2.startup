@@ -1,5 +1,0 @@
-ifconfig eth1 1.0.0.2/16 up
-ifconfig eth0 20.0.0.1/24 up
-route add -net 10.0.0.0/24 gw 1.0.0.1 dev eth1
-route add -net 30.0.0.0/24 gw 1.0.0.3 dev eth1
-

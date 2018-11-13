@@ -1,7 +1,0 @@
-eyesbook.com. IN SOA dnseyesbook.eyesbook.com. root.dnseyesbook.eyesbook.com. 1 2 3 4 5
-
-eyesbook.com. IN NS dnseyesbook.eyesbook.com.
-dnseyesbook.eyesbook.com. IN A 1.0.0.2
-
-www.eyesbook.com. IN A 1.0.0.3
-www.eyesbook.com. IN A 1.0.0.4

@@ -1,7 +1,0 @@
-ifconfig eth1 1.0.0.4/24 up
-route add default gw 1.0.0.1 dev eth1
-ifconfig eth0 10.0.0.1/24 up
-
-iptables – iptables –t nat –APREROUTING PREROUTING PREROUTING –d 1.0.0.4 d 1.0.0.4 d 1.0.0.4 –m statistic m statistic m statistic --mode nth mode nth mode nth --every 2 every 2 every 2 –j DNAT --to-destination 10.0.0.3
-iptables – iptables –t nat –APREROUTING PREROUTING PREROUTING –d 1.0.0.4 d 1.0.0.4 d 1.0.0.4–j DNAT --to-destination 10.0.0.2
-
