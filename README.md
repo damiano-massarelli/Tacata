@@ -7,10 +7,10 @@ To date, only an old version of Tacata is available in the branch named `old`.
 
 # Brief Tutorial
 
-To create a new lab, a file named `lab.confu` is required. This files contains
+To create a new lab, a file named `lab.confu` is required. This file contains
 the Netkit net configuration as well as additional information used by Tacata.
 
-Run `python tacata.py` in the folder containing the `lab.confu` to create the lab.
+Run `python tacata.py` in the folder containing the `lab.confu` file to create the lab.
 
 # Examples
 

@@ -437,8 +437,3 @@ def createLabFoldersAndFiles(labFile):
     createConfFile(labFile)
 
 createLabFoldersAndFiles("lab.confu")
-
-
-
-
-    

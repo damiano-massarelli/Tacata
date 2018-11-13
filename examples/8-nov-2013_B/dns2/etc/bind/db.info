@@ -1,0 +1,7 @@
+info. IN SOA dns2.info. root.dns2.info 1 2 3 4 5
+
+info. IN NS dns2.info.
+dns2.info. IN A 20.0.0.3
+
+server.info. IN A 20.0.0.2
+server.info. IN A 30.0.0.2

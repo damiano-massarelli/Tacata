@@ -1,0 +1,5 @@
+ifconfig eth0 120.0.0.2/24 up
+route add default gw 120.0.0.1 dev eth0
+
+a2enmod userdir
+/etc/init.d/apache2 start
