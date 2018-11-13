@@ -24,24 +24,38 @@ def _ip(addr, currentState = {}):
     currInterface = currentState["currInterface"]
     currInterface.setIp(addr)
 
-def _to(destination, gw, currentState = {}):
+def _to(params, currentState = {}):
+    # Split matched params on , and spaces
+    splittedParams = re.split(r'[,\s]+', params)
+
+    # Assign params.
+    destination = splittedParams[0]
+    gw = splittedParams[1]
+    destinationInterface = None
+
+    # Third param is required if gateway != default. If not declared, raise an exception.
+    if destination != DEFAULT_GW_STRING:
+        if len(splittedParams) == 3:
+            destinationInterface = splittedParams[2]
+        else:
+            raise Exception("Output Interface Number not declared for destination %s" % destination)
+
     if destination != DEFAULT_GW_STRING:
         isValidIP(destination)
     
     isValidIP(gw)
 
     currInterface = currentState["currInterface"]
-    currInterface.gateways.append((destination, gw))
+    currInterface.gateways.append((destination, gw, destinationInterface))
 
 def _webserver(deviceName, currentState = {}):
     currLab = currentState["currLab"]
     currDevice = currLab.get(deviceName)
     currDevice.services.append(WebServer(deviceName))
 
-
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
-    "^to\\((.+)\s?,\s?(.+)\\)$": _to,
+    "^to(?:\\()(.+)+(?:\\))$": _to,
     "^webserver\\((.+)\\)$": _webserver
 }
 
@@ -59,11 +73,13 @@ class Interface(object):
         dumpString = "ifconfig eth%s %s up\n" % (self.index, self.ip)
         for gateway in self.gateways:
             netLine = "default"
+            interfaceNum = self.index # Default gw -> interface = index
 
             if gateway[0] != DEFAULT_GW_STRING:
                 netLine = "-net %s" % (gateway[0])
+                interfaceNum = gateway[2].replace("eth", "") # Gw != default -> interface should be declared
             
-            dumpString += "route add %s gw %s dev eth%s\n" % (netLine, gateway[1], self.index)
+            dumpString += "route add %s gw %s dev eth%s\n" % (netLine, gateway[1], interfaceNum)
 
         startupFile.write(dumpString)
 
@@ -94,7 +110,7 @@ class Lab(object):
         self.labDir = "lab"
 
         if os.path.exists(self.labDir):
-            wantDelete = raw_input("A lab already exists, do you want to overwrite it? [y/n]")
+            wantDelete = raw_input("A lab already exists, do you want to overwrite it [y/n]? ")
             if wantDelete == "y":
                 shutil.rmtree(self.labDir, ignore_errors = True)
 
@@ -124,7 +140,7 @@ class Lab(object):
 def parseDeviceAndInterface(declaration):
     if declaration == "":
         return None, None
-    matches = re.search("(.*)\\[(\d+)\\]=(\w)", declaration)
+    matches = re.search("(.*)\\[(\d+)\\]=\"?(\w)\"?", declaration)
     return matches.group(1), matches.group(2)
 
 def parseCommands(commandString, **kwargs):
@@ -149,7 +165,10 @@ def parse():
         currentLine = 1
         for line in labfile:
             try:
-                line = line.replace("\n", "").replace("\r", "")
+                line = line.replace("\n", "").replace("\r", "").strip()
+                if line == "" or line.startswith("#"): # Skip empty lines and comments
+                    continue
+
                 netkitDef, commands = line.split("$")
                 netkitDef = netkitDef.strip()
 
