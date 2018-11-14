@@ -1,4 +1,4 @@
-import os 
+import os
 import re
 import shutil
 
@@ -9,10 +9,10 @@ DEFAULT_GW_STRING = "default"
 
 def isValidIP(address):
     parts = address.split('/')[0].split(".")
-    
+
     if len(parts) != 4:
         raise Exception("Invalid ip %s" % address)
-    
+
     for item in parts:
         if (not 1 <= len(item) <= 3) or (not 0 <= int(item) <= 255):
             raise Exception("Invalid ip %s" % address)
@@ -24,43 +24,53 @@ def _ip(addr, currentState = {}):
     currInterface = currentState["currInterface"]
     currInterface.setIp(addr)
 
-def _to(params, currentState = {}):
-    # Split matched params on , and spaces
-    splittedParams = re.split(r'[,\s]+', params)
-
-    # Assign params.
-    destination = splittedParams[0]
-    gw = splittedParams[1]
-    destinationInterface = None
-
-    # Third param is required if gateway != default. If not declared, raise an exception.
-    if destination != DEFAULT_GW_STRING:
-        if len(splittedParams) == 3:
-            destinationInterface = splittedParams[2]
-        else:
-            raise Exception("Output Interface Number not declared for destination %s" % destination)
-
+def _to(destination, gw, currentState = {}):
     if destination != DEFAULT_GW_STRING:
         isValidIP(destination)
-    
+
     isValidIP(gw)
 
     currInterface = currentState["currInterface"]
-    currInterface.gateways.append((destination, gw, destinationInterface))
+    currInterface.gateways.append((destination, gw))
 
 def _webserver(deviceName, currentState = {}):
     currLab = currentState["currLab"]
     currDevice = currLab.get(deviceName)
-    currDevice.services.append(WebServer(deviceName))
+    currDevice.services.append(WebServer(currDevice))
+
+def _balancer(params, currentState = {}):
+    # Split matched params on , and spaces
+    splittedParams = re.split(r'[,\s]+', params)
+
+    deviceName = splittedParams.pop(0)
+    mode = splittedParams.pop(0)
+    sourceInterfaceNum = splittedParams.pop(0)
+    destinationDevices = splittedParams
+
+    if mode != "random":
+        raise Exception("%s mode not supported on Load Balancer." % mode)
+
+    if len(destinationDevices) <= 0:
+        raise Exception("You should declare at least one device for Load Balancer %s." % deviceName)
+
+    currLab = currentState["currLab"]
+    currDevice = currLab.get(deviceName)
+    currDevice.services.append(LoadBalancer(currDevice, sourceInterfaceNum, destinationDevices))
 
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
-    "^to(?:\\()(.+)+(?:\\))$": _to,
-    "^webserver\\((.+)\\)$": _webserver
+    "^to\\((.+)\s?,\s?(.+)\\)$": _to,
+    "^webserver\\((.+)\\)$": _webserver,
+    "^balancer(?:\\()(.+)+(?:\\))$": _balancer
 }
 
+##############
+## SERVICES ##
+##############
 class Interface(object):
-    def __init__(self, index):
+    def __init__(self, device, index):
+        self.device = device
+
         self.index = index
         self.ip = None
         self.gateways = []
@@ -68,31 +78,55 @@ class Interface(object):
     def setIp(self, ip):
         isValidIP(ip)
         self.ip = ip
-    
+
+    def getIp(self, withSubnet = False):
+        if withSubnet:
+            return self.ip
+
+        return self.ip.split("/")[0]
+
     def dump(self, startupFile):
         dumpString = "ifconfig eth%s %s up\n" % (self.index, self.ip)
         for gateway in self.gateways:
             netLine = "default"
-            interfaceNum = self.index # Default gw -> interface = index
 
             if gateway[0] != DEFAULT_GW_STRING:
                 netLine = "-net %s" % (gateway[0])
-                interfaceNum = gateway[2].replace("eth", "") # Gw != default -> interface should be declared
-            
-            dumpString += "route add %s gw %s dev eth%s\n" % (netLine, gateway[1], interfaceNum)
+
+            dumpString += "route add %s gw %s dev eth%s\n" % (netLine, gateway[1], self.index)
 
         startupFile.write(dumpString)
 
 class WebServer(object):
-    def __init__(self, deviceName):
-        self.deviceName = deviceName
+    def __init__(self, device):
+        self.device = device
 
     def dump(self, startupFile):
-        os.makedirs(self.deviceName + "/var/www/html")
+        os.makedirs(self.device.name + "/var/www/html")
         startupFile.write("/etc/init.d/apache2 start")
-        
+
+class LoadBalancer(object):
+    def __init__(self, device, sourceInterfaceNum, destinationDevices):
+        self.device = device
+
+        self.sourceInterfaceNum = sourceInterfaceNum.replace("eth", "")
+        self.destinationDevices = destinationDevices
+
+    def dump(self, startupFile):
+        sourceIp = self.device.getInterfaceByNum(self.sourceInterfaceNum).getIp()
+
+        for name2iface in self.destinationDevices:
+            name, interfaceNum = name2iface.split("|")
+            destIp = self.device.lab.get(name).getInterfaceByNum(interfaceNum.replace("eth", "")).getIp()
+
+            startupFile.write("iptables --table nat --append PREROUTING --destination %s -p tcp --dport ##PORT## --match statistic --mode random --probability ##PROB## --jump DNAT --to-destination %s:##DESTPORT##\n" % (sourceIp, destIp))
+
+#####################
+## GENERIC CLASSES ##
+#####################
 class Device(object):
-    def __init__(self, name):
+    def __init__(self, lab, name):
+        self.lab = lab
         self.name = name
         self.services = []
 
@@ -101,6 +135,13 @@ class Device(object):
         with open(self.name + ".startup", "w") as deviceFile:
             for service in self.services:
                 service.dump(deviceFile)
+
+    def getInterfaceByNum(self, index):
+        for service in self.services:
+            if isinstance(service, Interface) and index == service.index:
+                return service
+
+        raise Exception("Interface %s not found on device %s" % (index, self.name))
 
 class Lab(object):
     def __init__(self):
@@ -122,7 +163,7 @@ class Lab(object):
 
     def getOrNew(self, name):
         if name not in self.name2devices:
-            self.name2devices[name] = Device(name)
+            self.name2devices[name] = Device(self, name)
 
         return self.name2devices[name]
 
@@ -180,7 +221,7 @@ def parse():
                     currDeviceName, currInterfaceNum = parseDeviceAndInterface(netkitDef)
 
                     currDevice = currLab.getOrNew(currDeviceName)
-                    currInterface = Interface(currInterfaceNum)
+                    currInterface = Interface(currDevice, currInterfaceNum)
                     currDevice.services.append(currInterface)
 
                 parseCommands(commands, currDevice = currDevice, currInterface = currInterface, currLab = currLab)
