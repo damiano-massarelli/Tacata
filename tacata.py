@@ -517,9 +517,6 @@ def parse():
 
             currentLine += 1
 
-    try:
-        currLab.dump()
-    except Exception as e:
-        print "Error %s" % str(e)
+    currLab.dump()
 
 parse()
