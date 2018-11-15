@@ -1,0 +1,17 @@
+pc1[0]="A"        $ip(192.168.0.111/24); has_name(pc1.lugroma3.org)
+$ns_resolv(pc1, dnslug|eth0)
+
+dnslug[0]="A"     $ip(192.168.0.11/24)
+dnsorg[0]="A"     $ip(192.168.0.1/24)
+dnsroot[0]="A"    $ip(192.168.0.5/24)
+dnsnet[0]="A"     $ip(192.168.0.2/24)
+dnsnano[0]="A"    $ip(192.168.0.22/24)
+
+$dns(dnsroot, ., master)
+$dns(dnsorg, org., master)
+$dns(dnslug, lugroma3.org., master)
+$dns(dnsnet, net., master)
+$dns(dnsnano, nanoinside.net., master)
+
+pc2[0]="A"        $ip(192.168.0.222/24); has_name(pc2.nanoinside.net)
+$ns_resolv(pc2, dnsnano|eth0)
