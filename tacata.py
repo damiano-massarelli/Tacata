@@ -180,20 +180,23 @@ class NameserverDefault(object):
         self.nsIface = nsIface.replace("eth", "")
 
     def dump(self, startupFile):
-        os.makedirs(self.device.name + "/etc/")
+        if not os.path.exists(self.device.name + "/etc/"):
+            os.makedirs(self.device.name + "/etc/")
 
         with open(self.device.name + "/etc/resolv.conf", "w") as resolvFile:
             # Search Name for this NS Device
             name = self.device.lab.nameserverTree.getNameByDevice(self.nsName)
-            nsIp = self.device.lab.get(self.nsName).getInterfaceByNum(self.nsIface).getIp()
 
-            # Purge last dot
-            if name != None:
-                name = name[:-1]
+            if self.device.name == self.nsName: # If device configured is ALSO local NS for the device
+                nsIp = "127.0.0.1"
+            else:
+                nsIp = self.device.lab.get(self.nsName).getInterfaceByNum(self.nsIface).getIp()
 
+            # Write NS IP
             resolvFile.write("nameserver %s\n" % nsIp)
 
-            if name != None: # If local DNS (or not declared, skip the line)
+            if name != None: # If local DNS (or not declared), skip the line
+                name = name[:-1] # Purge last dot
                 resolvFile.write("search %s" % name)
 
 class Nameserver(object):
@@ -496,8 +499,10 @@ def parseCommands(commandString, **kwargs):
 def parse():
     currLab = Lab()
     with open("../lab.confu", "r") as labfile:
-        currentLine = 1
+        currentLine = 0
         for line in labfile:
+            currentLine += 1
+
             try:
                 line = line.replace("\n", "").replace("\r", "").strip()
                 if line == "" or line.startswith("#"): # Skip empty lines and comments
@@ -521,8 +526,6 @@ def parse():
             except Exception as e:
                 print "Error at line %d: %s" % (currentLine, str(e))
                 return
-
-            currentLine += 1
 
     currLab.dump()
 
