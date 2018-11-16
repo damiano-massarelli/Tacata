@@ -160,15 +160,17 @@ class LoadBalancer(object):
     def dump(self, startupFile):
         sourceIp = self.device.getInterfaceByNum(self.sourceInterfaceNum).getIp()
 
-        for name2iface in self.destinationDevices:
+        for i, name2iface in enumerate(self.destinationDevices):
             name, interfaceNum = name2iface.split("|")
             destIp = self.device.lab.get(name).getInterfaceByNum(interfaceNum.replace("eth", "")).getIp()
 
-            ipTablesParams = "--mode random --probability ##PROB##"
-            if self.mode == "nth":
-                ipTablesParams = "--mode nth --every ##N##"
+            ipTablesParams = ""
+            if i < len(self.destinationDevices) - 1:
+                ipTablesParams = "-m statistic --mode random --probability ##PROB##"
+                if self.mode == "nth":
+                    ipTablesParams = "-m statistic --mode nth --every ##N##"
 
-            startupFile.write("iptables --table nat --append PREROUTING --destination %s -p tcp --dport ##PORT## --match statistic %s --jump DNAT --to-destination %s:##DESTPORT##\n" % (sourceIp, ipTablesParams, destIp))
+            startupFile.write("iptables -t nat -A PREROUTING -d %s %s -j DNAT --to-destination %s\n" % (sourceIp, ipTablesParams, destIp))
 
 class NameserverDefault(object):
     def __init__(self, device, nsName, nsIface):
