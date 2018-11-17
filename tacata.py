@@ -1,12 +1,18 @@
 import os
 import re
 import shutil
+import ctypes
+import socket
+import struct
 
 ###############
 ## CONSTANTS ##
 ###############
 DEFAULT_GW_STRING = "default"
 
+#######################
+## UTILITY FUNCTIONS ##
+#######################
 def isValidIP(address):
     parts = address.split('/')[0].split(".")
 
@@ -16,6 +22,23 @@ def isValidIP(address):
     for item in parts:
         if (not 1 <= len(item) <= 3) or (not 0 <= int(item) <= 255):
             raise Exception("Invalid ip %s." % address)
+
+def ip2int(addr):
+    return struct.unpack("!I", socket.inet_aton(addr))[0]
+
+def getNetmaskInfo(ip):
+    netmaskLength = -1
+    try:
+        netmaskLength = int(ip.split("/")[1])
+    except Exception:
+        raise Exception("Unable to get netmask information from %s. Ip addresses should be x.y.z.w/n" % ip)
+    netmask = ctypes.c_uint32(0xFFFFFFFF) # 32 bits. using ctypes guarantees that shifts do not overflow
+    netmask.value <<= (32 - netmaskLength) # obtain actual netmask
+
+    ipInt = ip2int(ip.split("/")[0]) # converts the ip to a number
+    prefix = ipInt & netmask.value
+
+    return prefix, netmask.value
 
 ##############
 ## COMMANDS ##
@@ -436,11 +459,33 @@ class NameserverTree(object):
         # No luck in children, return None
         return None
 
+class Lan(object):
+    def __init__(self, lab, name):
+        self.lab = lab
+        self.name = name
+        self.interfaces = []
+
+        # data representing ips for this lan
+        # all interfaces on the same lan should be compliant
+        self.netmask = None
+        self.prefix = None
+
+    def addInterface(self, iface):
+        ifaceNetmask, ifacePrefix = getNetmaskInfo(iface.getIp(withSubnet = True))
+        if len(self.interfaces) == 0: # this is the first interface, lets set netmask and prefix
+            self.netmask = ifaceNetmask
+            self.prefix = ifacePrefix
+        if ifaceNetmask != self.netmask or ifacePrefix != self.prefix:
+            raise Exception("Interfaces in lan %s have different prefixes" % self.name)
+
+        self.interfaces.append(iface)
+
 class Lab(object):
     def __init__(self):
         # configuration for netkit lab.conf
         self.confLines = []
         self.name2devices = {}
+        self.name2lans = {}
         self.nameserverTree = NameserverTree()
         self.labDir = "lab"
 
@@ -448,6 +493,9 @@ class Lab(object):
             wantDelete = raw_input("A lab already exists, do you want to overwrite it [y/n]? ")
             if wantDelete == "y":
                 shutil.rmtree(self.labDir, ignore_errors = True)
+            else:
+                print "Bye then, say hi to Pino"
+                exit()
 
         os.mkdir(self.labDir)
         os.chdir(self.labDir)
@@ -464,6 +512,15 @@ class Lab(object):
     def get(self, name):
         return self.name2devices[name]
 
+    def getLan(self, lanName):
+        return self.name2lans[lanName]
+
+    def getOrNewLan(self, lanName):
+        if lanName not in self.name2lans:
+            self.name2lans[lanName] = Lan(self, lanName)
+
+        return self.getLan(lanName)
+
     def dump(self):
         confString = "\n".join(self.confLines)
         with open("lab.conf", "w") as labConfFile:
@@ -478,7 +535,9 @@ def parseDeviceAndInterface(declaration):
     if declaration == "":
         return None, None
     matches = re.search("(.*)\\[(\d+)\\]=\"?(\w)\"?", declaration)
-    return matches.group(1), matches.group(2)
+    if matches is None or len(matches.groups()) != 3:
+        raise Exception("Wrong interface declaration. Should be <device>[<interface_number>]=<lan>")
+    return matches.groups()
 
 def parseCommands(commandString, **kwargs):
     commands = commandString.split(";")
@@ -511,22 +570,29 @@ def parse():
                 netkitDef, commands = line.split("$")
                 netkitDef = netkitDef.strip()
 
-                currDevice, currInterface = None, None
+                currDevice, currInterface, currLan = None, None, None
 
                 if netkitDef != "":
                     currLab.addConfLine(netkitDef)
 
-                    currDeviceName, currInterfaceNum = parseDeviceAndInterface(netkitDef)
+                    currDeviceName, currInterfaceNum, currLanName = parseDeviceAndInterface(netkitDef)
 
                     currDevice = currLab.getOrNew(currDeviceName)
                     currInterface = Interface(currDevice, currInterfaceNum)
                     currDevice.services.append(currInterface)
 
+                    currLan = currLab.getOrNewLan(currLanName)
+
                 parseCommands(commands, currDevice = currDevice, currInterface = currInterface, currLab = currLab)
+                
+                # after commands are parsed so that ip is set on interface
+                if currLan is not None:
+                    currLan.addInterface(currInterface)
             except Exception as e:
                 print "Error at line %d: %s" % (currentLine, str(e))
                 return
 
     currLab.dump()
 
-parse()
+if __name__ == '__main__':
+    parse()
