@@ -23,9 +23,9 @@ $dns(ns-eyesbook, eyesbook.com., master)
 ws3[0]="D"		$ip(1.0.0.2/24); to(default, 1.0.0.1); has_name(www.eyesbook.com)
 $webserver(ws3)
 
-ws1[0]="E"		$ip(10.0.0.2/24)
+ws1[0]="E"		$ip(10.0.0.2/24); to(default, 10.0.0.1)
 $webserver(ws1)
-ws2[0]="E"		$ip(10.0.0.3/24)
+ws2[0]="E"		$ip(10.0.0.3/24); to(default, 10.0.0.1)
 $webserver(ws2)
 
 l4switch[0]="E"		$ip(10.0.0.1/24);
