@@ -49,7 +49,8 @@ def getNetmaskInfo(ip):
     try:
         netmaskLength = int(ip.split("/")[1])
     except Exception:
-        raise Exception("Unable to get netmask information from %s. Ip addresses should be x.y.z.w/n" % ip)
+        raise Exception("Unable to get netmask information from `%s`. Ip addresses should be x.y.z.w/n" % ip)
+    
     netmask = ctypes.c_uint32(0xFFFFFFFF) # 32 bits. using ctypes guarantees that shifts do not overflow
     netmask.value <<= (32 - netmaskLength) # obtain actual netmask
 
@@ -536,11 +537,12 @@ class Lan(object):
 
     def addInterface(self, iface):
         ifaceNetmask, ifacePrefix = getNetmaskInfo(iface.getIp(withSubnet = True))
+
         if len(self.interfaces) == 0: # this is the first interface, lets set netmask and prefix
             self.netmask = ifaceNetmask
             self.prefix = ifacePrefix
         if ifaceNetmask != self.netmask or ifacePrefix != self.prefix:
-            raise Exception("Interfaces in lan %s have different prefixes" % self.name)
+            raise Exception("Interface `%s` in LAN `%s` has different prefix!" % (iface, self.name))
 
         self.interfaces.append(iface)
 
@@ -559,7 +561,7 @@ class Lab(object):
             if wantDelete == "y":
                 shutil.rmtree(self.labDir, ignore_errors = True)
             else:
-                print "Bye then, say hi to Pino"
+                print "- Bye."
                 exit()
 
         os.mkdir(self.labDir)
@@ -608,8 +610,10 @@ def parseDeviceAndInterface(declaration):
     if declaration == "":
         return None, None
     matches = re.search("(.*)\\[(\d+)\\]=\"?(\w)\"?", declaration)
+
     if matches is None or len(matches.groups()) != 3:
-        raise Exception("Wrong interface declaration. Should be <device>[<interface_number>]=<lan>")
+        raise Exception("Wrong interface declaration. Should be <device>[<interface_number>]=<lan>.")
+    
     return matches.groups()
 
 def parseCommands(commandString, **kwargs):
