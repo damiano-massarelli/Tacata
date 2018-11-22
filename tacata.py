@@ -327,6 +327,8 @@ class Nameserver(object):
                 dbFile.write(line)
 
 class Zebra(object):
+    # redistribuible routes
+    REDISTRIBUIBLE = {"connected", "rip", "ospf", "bgp"}
     def __init__(self, device):
         self.device = device
 
@@ -364,7 +366,11 @@ class Rip(Zebra):
         self.addDaemon("ripd")
 
         with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
-            redistributeString = "redistribute " + "\nredistribute ".join(self.redistribute)
+            redistributeString = ""
+            for red in self.redistribute:
+                if red not in Zebra.REDISTRIBUIBLE:
+                    raise Exception("cannot redistribute %s use one of %s" % (red, list(Zebra.REDISTRIBUIBLE)))
+                redistributeString += "redistribute %s\n" % red
             ripFile.write(RIP_CONF % (redistributeString, self.network))
 
 #####################
