@@ -9,8 +9,10 @@ import struct
 import datetime
 import argparse
 
-# args from the user
+# Args from the CLI 
 args = None
+# Final msgs to display to user (ex. Complete Load Balancing, ...)
+finalTodos = []
 
 ###############
 ## CONSTANTS ##
@@ -30,6 +32,8 @@ ROOT_NAME = "."
 ROOT_FANCY_NAME = "ROOT"
 LOCAL_NAME = "None"
 LOCAL_FANCY_NAME = "local"
+NAMED_CONF_LINE = "zone \"%s\" {\n\ttype %s;\n\tfile \"/etc/bind/%s\";\n};\n\n"
+DB_CONF_HEADER = "$TTL   60000\n@               IN      SOA     %s.%s    root.%s.%s %s 28800 14400 3600000 0\n\n"
 # ZEBRA/QUAGGA
 ZEBRA_CONF = """!
 hostname zebra
@@ -74,7 +78,7 @@ def getNetmaskInfo(ip):
     try:
         netmaskLength = int(ip.split("/")[1])
     except Exception:
-        raise Exception("Unable to get netmask information from `%s`. Ip addresses should be x.y.z.w/n" % ip)
+        raise Exception("Unable to get netmask information from `%s`. Ip addresses should be x.y.z.w/n." % ip)
     
     netmask = ctypes.c_uint32(0xFFFFFFFF) # 32 bits. using ctypes guarantees that shifts do not overflow
     netmask.value <<= (32 - netmaskLength) # obtain actual netmask
@@ -145,11 +149,11 @@ def _ns_resolv(deviceName, nsName2ifaceNum, currentState = {}):
         nsName, ifaceNum = nsName2ifaceNum.split("|")
         currDevice.services.append(NameserverDefault(currDevice, nsName, ifaceNum))
 
-def _dns(deviceName, name, type, currentState = {}):
+def _dns(deviceName, ifaceNum, name, dnsType, currentState = {}):
     currLab = currentState["currLab"]
     currDevice = currLab.get(deviceName)
 
-    currLab.nameserverTree.addDNSDevice(name, type, currDevice)
+    currLab.nameserverTree.addDNSDevice(name, dnsType, currDevice, ifaceNum)
 
     # Nameserver Service should be declared only once on Device.
     if currDevice.getServiceByType(Nameserver) is None:
@@ -174,7 +178,7 @@ names2commands = {
     "^balancer(?:\\()(.+)+(?:\\))$": _balancer,
     "^has_name\\((.+)\\)$": _has_name,
     "^ns_resolv\\((.+)\s?,\s?(.+)\\)$": _ns_resolv,
-    "^dns\\((.+)\s?,\s?(.+),\s?(.+)\\)$": _dns,
+    "^dns\\((.+)\s?,\s?(.+),\s?(.+),\s?(.+)\\)$": _dns,
     "^rip(?:\\()(.+)+(?:\\))$": _rip
 }
 
@@ -240,17 +244,19 @@ class LoadBalancer(object):
         self.device = device
 
         self.mode = mode
-        self.sourceInterfaceNum = sourceInterfaceNum.replace("eth", "")
+        self.sourceInterfaceNum = sourceInterfaceNum
         self.destinationDevices = destinationDevices
 
     def dump(self, startupFile):
-        log("\t- Creating load balancing on eth%s with `%s` mode. (!! REMEMBER TO COMPLETE THE startup FILE !!)" % (self.sourceInterfaceNum, self.mode))
+        log("\t- Creating load balancing on %s with `%s` mode." % (self.sourceInterfaceNum, self.mode))
+
+        finalTodos.append("- Complete the iptables commands in %s.startup file with balancing information." % self.device.name)
 
         sourceIp = self.device.getInterfaceByNum(self.sourceInterfaceNum).getIp()
 
         for i, name2iface in enumerate(self.destinationDevices):
             name, interfaceNum = name2iface.split("|")
-            destIp = self.device.lab.get(name).getInterfaceByNum(interfaceNum.replace("eth", "")).getIp()
+            destIp = self.device.lab.get(name).getInterfaceByNum(interfaceNum).getIp()
 
             log("\t\t- Adding device `%s` (%s - %s) rule." % (name, destIp, interfaceNum))
 
@@ -267,7 +273,7 @@ class NameserverDefault(object):
         self.device = device
 
         self.nsName = nsName
-        self.nsIface = nsIface.replace("eth", "")
+        self.nsIface = nsIface
 
     def dump(self, startupFile):
         # Sometimes /etc/ folder already exists...
@@ -295,11 +301,6 @@ class Nameserver(object):
     def __init__(self, device):
         self.device = device
 
-        # Template for named.conf lines
-        self.NAMED_STUB = "zone \"%s\" {\n\ttype %s;\n\tfile \"/etc/bind/%s\";\n};\n\n"
-        # Template for master db file header
-        self.DB_STUB = "$TTL   60000\n@               IN      SOA     %s.%s    root.%s.%s %s 28800 14400 3600000 0\n\n"
-
     def dump(self, startupFile):
         # Write bind startup in startup file
         startupFile.write("/etc/init.d/bind start\n")
@@ -310,7 +311,7 @@ class Nameserver(object):
     # Writes a line in the named.conf file
     def writeNamedConfLine(self, zone, type, fileName):
         with open(self.device.name + "/etc/bind/named.conf", "a") as namedFile:
-            namedFile.write(self.NAMED_STUB % (zone, type, fileName))
+            namedFile.write(NAMED_CONF_LINE % (zone, type, fileName))
 
     # Write db file.
     def writeDbFile(self, name, type, fileName, lines, newDeviceName = None):
@@ -321,7 +322,7 @@ class Nameserver(object):
                     deviceName = newDeviceName
 
                 today = datetime.date.today() # Used to generate serial for SOA line
-                dbFile.write(self.DB_STUB % (deviceName, name, deviceName, name, today.strftime("%Y%m%d%U")))
+                dbFile.write(DB_CONF_HEADER % (deviceName, name, deviceName, name, today.strftime("%Y%m%d%U")))
 
             for line in lines:
                 dbFile.write(line)
@@ -329,6 +330,7 @@ class Nameserver(object):
 class Zebra(object):
     # redistribuible routes
     REDISTRIBUIBLE = {"connected", "rip", "ospf", "bgp"}
+
     def __init__(self, device):
         self.device = device
 
@@ -357,20 +359,27 @@ class Zebra(object):
 class Rip(Zebra):
     def __init__(self, device, network, redistribute):
         super(Rip, self).__init__(device)
+
         self.network = network
         self.redistribute = redistribute
 
     def dump(self, startupFile):
         super(Rip, self).dump(startupFile)
+
         isValidIP(self.network)
+
         self.addDaemon("ripd")
 
         with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
             redistributeString = ""
             for red in self.redistribute:
                 if red not in Zebra.REDISTRIBUIBLE:
-                    raise Exception("cannot redistribute %s use one of %s" % (red, list(Zebra.REDISTRIBUIBLE)))
+                    raise Exception("Cannot redistribute `%s` use one of: %s." % (red, list(Zebra.REDISTRIBUIBLE)))
+
                 redistributeString += "redistribute %s\n" % red
+
+            log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
+
             ripFile.write(RIP_CONF % (redistributeString, self.network))
 
 #####################
@@ -392,13 +401,16 @@ class Device(object):
 
     # Returns a specific eth interface declared on the Device.
     def getInterfaceByNum(self, index):
+        if index.startswith("eth"):
+            index = index.replace("eth", "")
+
         for service in self.services:
             if isinstance(service, Interface) and index == service.index:
                 return service
 
         raise Exception("Interface %s not found on device `%s`." % (index, self.name))
 
-    # Checks if the Device has a specified Service, if so return the first instance. If not, return False.
+    # Checks if the Device has a specified Service, if so return the first instance. If not, return None.
     def getServiceByType(self, serviceType):
         for service in self.services:
             if isinstance(service, serviceType):
@@ -413,7 +425,7 @@ class NameserverNode(object):
     def __init__(self, name):
         self.name = name            # Name of the zone: ex. lugroma3.org.
         self.hostnames2ifaces = []  # Devices which aren't involved as nameservers, couple (hostname (ex. www), Interface instance)
-        self.nsDevices2types = []   # Devices which are part of NS infrastructure, couple (Device instance, NS type (ex. master))
+        self.nsDevices2types2ifaces = []   # Devices which are part of NS infrastructure, couple (Device instance, NS type (ex. master))
         self.servedNames = {}       # Children served names of the current name
 
     def dump(self, rootLines):
@@ -440,10 +452,10 @@ class NameserverNode(object):
                 log("\t\t- `%s` at %s" % (hostname2iface[0], hostname2iface[1].getIp()))
 
         # Foreach nameserver device declared in the current node.
-        for device2type in self.nsDevices2types:
-            log("\t- Adding device `%s` as %s for this zone." % (device2type[0].name, device2type[1]))
+        for device2type2iface in self.nsDevices2types2ifaces:
+            log("\t- Adding device `%s` as %s for this zone." % (device2type2iface[0].name, device2type2iface[1]))
 
-            nameserverService = device2type[0].getServiceByType(Nameserver)
+            nameserverService = device2type2iface[0].getServiceByType(Nameserver)
 
             # We're not in root, write db.root line & file.
             if not isRoot:
@@ -451,11 +463,11 @@ class NameserverNode(object):
                 nameserverService.writeDbFile(None, "hint", "db.root", rootLines)
 
             # Write Info About Served Names in named.conf file
-            nameserverService.writeNamedConfLine(nameToUse, device2type[1], dbFileName)
+            nameserverService.writeNamedConfLine(nameToUse, device2type2iface[1], dbFileName)
 
             dbLines = []
             # Info about myself
-            deviceName = device2type[0].name
+            deviceName = device2type2iface[0].name
             name = self.name
 
             # Special names for root node.
@@ -466,8 +478,8 @@ class NameserverNode(object):
             dbLines.append("@     IN  NS  %s.%s\n" % (deviceName, name))
             if isRoot:
                 deviceName += "."
-            # TODO: By default we pick eth0, that's not ok...
-            dbLines.append("%s    IN  A   %s\n\n" % (deviceName, device2type[0].getInterfaceByNum("0").getIp()))
+
+            dbLines.append("%s    IN  A   %s\n\n" % (deviceName, device2type2iface[2].getIp()))
 
             if len(self.servedNames) > 0:    # I'm not a leaf, tell what I know about my children
                 for servedName in self.servedNames:
@@ -479,10 +491,9 @@ class NameserverNode(object):
                         # Why `not isRoot`? Because in root we want => org. instead of => org!
                         shortName = childInfo.name.replace(self.name, "")[:-1]
 
-                    for childDevice2type in childInfo.nsDevices2types:
-                        dbLines.append("%s    IN  NS  %s.%s\n" % (shortName, childDevice2type[0].name, childInfo.name))
-                        # TODO: By default we pick eth0, that's not ok...
-                        dbLines.append("%s.%s IN  A   %s\n\n" % (childDevice2type[0].name, shortName, childDevice2type[0].getInterfaceByNum("0").getIp()))
+                    for childDevice2type2iface in childInfo.nsDevices2types2ifaces:
+                        dbLines.append("%s    IN  NS  %s.%s\n" % (shortName, childDevice2type2iface[0].name, childInfo.name))
+                        dbLines.append("%s.%s IN  A   %s\n\n" % (childDevice2type2iface[0].name, shortName, childDevice2type2iface[2].getIp()))
 
             dbLines.append("\n")
 
@@ -494,23 +505,25 @@ class NameserverNode(object):
             if isRoot:
                 newDeviceName = deviceName[:-1]
 
-            nameserverService.writeDbFile(name, device2type[1], dbFileName, dbLines, newDeviceName)
+            nameserverService.writeDbFile(name, device2type2iface[1], dbFileName, dbLines, newDeviceName)
 
 class NameserverTree(object):
     def __init__(self):
         self.root = NameserverNode(ROOT_NAME)                # Root Nameserver Node, here everything starts.
         self.local = NameserverNode("~")                     # Nodes without any authority, they only know information about root nodes.
 
-    def addDNSDevice(self, name, type, device):
+    def addDNSDevice(self, name, dnsType, device, ifaceNum):
+        iface = device.getInterfaceByNum(ifaceNum)
+        
         if name == ROOT_NAME or name == ROOT_FANCY_NAME: # This is a root NS, add it to the roots
-            self.root.nsDevices2types.append((device, type))
+            self.root.nsDevices2types2ifaces.append((device, dnsType, iface))
             return
 
         if name == LOCAL_NAME: # No name defined
-            if type != LOCAL_FANCY_NAME: # Type MUST be local!
+            if dnsType != LOCAL_FANCY_NAME: # Type MUST be local!
                 raise Exception("You should declare a name if type isn't `%s` on `%s`" % (LOCAL_FANCY_NAME, device.name))
 
-            self.local.nsDevices2types.append(device)
+            self.local.nsDevices2types2ifaces.append(device)
             return
 
         if name.endswith('.'):
@@ -518,11 +531,11 @@ class NameserverTree(object):
 
         # Start tree recursion
         names = name.split('.')
-        self._addToName(self.root, names, "", type, "nsDevices2types", device)
+        self._addToName(self.root, names, "", "nsDevices2types2ifaces", device, dnsType, iface)
 
     def addNamedDevice(self, name, device, iface):
         if name == ROOT_NAME or name == ROOT_FANCY_NAME:
-            raise Exception("You can't add a named host to the root DNS name!");
+            raise Exception("You can't add a named host to the root DNS name!")
 
         if name.endswith('.'):
             name = name[:-1] # Purge last dot if declared
@@ -530,9 +543,9 @@ class NameserverTree(object):
         names = name.split('.')
         hostName = names.pop(0) # Gets hostname, example: pc1.lugroma3.org => pc1
 
-        self._addToName(self.root, names, "", None, "hostnames2ifaces", (hostName, iface))
+        self._addToName(self.root, names, "", "hostnames2ifaces", hostName, None, iface)
 
-    def _addToName(self, parentNode, names, name, type, devType, device):
+    def _addToName(self, parentNode, names, name, devType, device, dnsType, iface):
         nextName = names.pop()
         finalName = nextName + "." + name
 
@@ -542,10 +555,10 @@ class NameserverTree(object):
 
         # End of recursion
         if len(names) == 0:
-            if type == None: # Named host, not part of NS infrastructure, only append couple (hostname, iface)
-                toAppend = device
-            else: # Part of NS infrastructure, append couple (device, type)
-                toAppend = (device, type)
+            if dnsType == None: # Named host, not part of NS infrastructure, only append couple (hostname, iface)
+                toAppend = (device, iface)
+            else: # Part of NS infrastructure, append triple (device, type, iface)
+                toAppend = (device, dnsType, iface)
 
             devices = getattr(parentNode.servedNames[nextName], devType)
             # Append device to the current name.
@@ -555,19 +568,18 @@ class NameserverTree(object):
             return
 
         # Still some nodes to traverse, launch recursion on children
-        self._addToName(parentNode.servedNames[nextName], names, finalName, type, devType, device)
+        self._addToName(parentNode.servedNames[nextName], names, finalName, devType, device, dnsType, iface)
 
     def dump(self):
-        if len(self.root.nsDevices2types) == 0: # No nameservers in root, don't dump DNS
+        if len(self.root.nsDevices2types2ifaces) == 0: # No nameservers in root, don't dump DNS
             log("- Nameserver tree is empty. Nothing to dump.")
             return
 
         # Lines for db.root file (when current node is local or not root NS)
         rootLines = []
         rootLines.append(". IN  NS  ROOT-SERVER.\n")
-        for device2type in self.root.nsDevices2types:
-            # TODO: By default we pick eth0, that's not ok...
-            rootLines.append("ROOT-SERVER.  IN  A   %s" % (device2type[0].getInterfaceByNum("0").getIp()))
+        for device2type2iface in self.root.nsDevices2types2ifaces:
+            rootLines.append("ROOT-SERVER.  IN  A   %s" % (device2type2iface[2].getIp()))
 
         # Dump the NS tree for real.
         self._realDump(self.root, rootLines)
@@ -583,7 +595,7 @@ class NameserverTree(object):
             self._realDump(currentNode.servedNames[servedName], rootLines)
 
     def _dumpLocals(self, rootLines):
-        for device in self.local.nsDevices2types:
+        for device in self.local.nsDevices2types2ifaces:
             log("- `%s` is a local nameserver (only knows information about roots)..." % device.name)
 
             nameserverService = device.getServiceByType(Nameserver)
@@ -596,9 +608,9 @@ class NameserverTree(object):
 
     def _getNameByDeviceRecursive(self, currentNode, deviceName):
         # Scan in current DNS devices
-        for device2type in currentNode.nsDevices2types:
+        for device2type2iface in currentNode.nsDevices2types2ifaces:
             # If we found the device
-            if device2type[0].name == deviceName:
+            if device2type2iface[0].name == deviceName:
                 # Return the name of this node
                 return currentNode.name
 
@@ -681,7 +693,7 @@ class Lab(object):
         with open("lab.conf", "w") as labConfFile:
             labConfFile.write(confString)
 
-        log("- Done!\n")
+        log("- Done!")
 
         log("================ DUMPING DEVICES ================")
         for device in self.name2devices:
@@ -691,6 +703,8 @@ class Lab(object):
         self.nameserverTree.dump()
 
         print "================= DUMPING DONE! ================="
+        for i, todo in enumerate(finalTodos):
+            print "\t" + str(i + 1) + " " + todo
 
 def parseDeviceAndInterface(declaration):
     if declaration == "":
@@ -736,7 +750,7 @@ def parse():
     try:
         currLab = Lab()
         with open("../lab.confu", "r") as labfile:
-            log("- `lab.confu` file found in current folder, starting dump...")
+            log("- `lab.confu` file found in specified folder, starting dump...")
 
             for line in labfile:
                 currentLine += 1

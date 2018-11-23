@@ -2,7 +2,7 @@ pc[0]="A"		$ip(100.0.0.4/24); to(default, 100.0.0.1)
 $ns_resolv(pc, ns1|eth0)
 
 ns1[0]="A"		$ip(100.0.0.3/24); to(default, 100.0.0.1)
-$dns(ns1, com., master)
+$dns(ns1, eth0, com, master)
 
 server1[0]="A"		$ip(100.0.0.2/24); to(default, 100.0.0.1); has_name(site.com)
 $webserver(server1, rewrite)
@@ -14,10 +14,10 @@ r2[0]="C"		$ip(200.0.0.1/24)
 r2[1]="B"		$ip(150.0.0.2/24); to(100.0.0.0/24, 150.0.0.1)
 
 ns2[0]="C"		$ip(200.0.0.2/24); to(default, 200.0.0.1)
-$dns(ns2, ., master)
+$dns(ns2, eth0, ROOT, master)
 
 ns3[0]="C"		$ip(200.0.0.3/24); to(default, 200.0.0.1)
-$dns(ns3, net., master)
+$dns(ns3, eth0, net, master)
 
 server2[0]="C"		$ip(200.0.0.4/24); to(default, 200.0.0.1); has_name(cdn.net)
 $webserver(server2)
