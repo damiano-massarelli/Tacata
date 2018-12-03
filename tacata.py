@@ -56,7 +56,6 @@ router rip
 !
 log file /var/log/zebra/ripd.log"""
 
-
 OSPF_CONF = """!
 hostname ospfd
 password zebra
@@ -244,8 +243,7 @@ def _bgp(params, currentState = {}):
 
     deviceName = splittedParams.pop(0)
     asNum = splittedParams.pop(0)
-    neighborIp = splittedParams.pop(0)
-    neighborAsNum = splittedParams.pop(0)
+    neighborName2iface = splittedParams.pop(0)
     redistribute = splittedParams
 
     currLab = currentState["currLab"]
@@ -254,9 +252,9 @@ def _bgp(params, currentState = {}):
     bgpService = currDevice.getServiceByType(BGP)
     # check whether an bgp service already exists
     if bgpService is None:
-        currDevice.services.append(BGP(currDevice, asNum, neighborIp, neighborAsNum, redistribute))
+        currDevice.services.append(BGP(currDevice, asNum, neighborName2iface, redistribute))
     else:
-        bgpService.neighbors[neighborIp] = neighborAsNum
+        bgpService.neighbors.append(neighborName2iface)
 
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
@@ -472,16 +470,17 @@ class Rip(Zebra):
         return networksStr
 
     def dump(self, startupFile):
-        if not os.path.exists(self.device.name + "/etc/quagga/ripd.conf"):
-            super(Rip, self).dump(startupFile)
+        super(Rip, self).dump(startupFile)
 
-            self.addDaemon("ripd")
+        self.addDaemon("ripd")
 
-            with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
-                redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
-                log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.networks, self.redistribute))
+        with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
+            redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
+            ripFile.write(RIP_CONF % (redistributeString, self.getNetworks()))
 
-                ripFile.write(RIP_CONF % (redistributeString, self.getNetworks()))
+        log("\t- Adding RIPv2 daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
+        for network in self.networks:
+                log("\t\t- Network %s added to RIPv2." % network)
 
 class OSPF(Zebra):
     def __init__(self, device, networks = [], areas = [], redistribute = []):
@@ -514,47 +513,59 @@ class OSPF(Zebra):
 
     def dump(self, startupFile):
         if self.networks == []:
-            raise Exception("Cost specified but ospf not configured for device %s" % self.device.name)
+            raise Exception("Cost specified but OSPF not configured for device `%s`." % self.device.name)
 
-        if not os.path.exists(self.device.name + "/etc/quagga/ospfd.conf"):
-            super(OSPF, self).dump(startupFile)
+        super(OSPF, self).dump(startupFile)
 
-            self.addDaemon("ospfd")
+        self.addDaemon("ospfd")
 
-            with open(self.device.name + "/etc/quagga/ospfd.conf", "w") as ospfFile:
-                redistributeString = super(OSPF, self).buildRedistributeString(self.redistribute)
-                log("\t- Adding OSPF daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.networks, self.redistribute))
+        with open(self.device.name + "/etc/quagga/ospfd.conf", "w") as ospfFile:
+            redistributeString = super(OSPF, self).buildRedistributeString(self.redistribute)
+            ospfFile.write(OSPF_CONF % (self.getCosts(), redistributeString, self.getNetworksAndAreas()))
 
-                ospfFile.write(OSPF_CONF % (self.getCosts(), redistributeString, self.getNetworksAndAreas()))
+        log("\t- Adding OSPF daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
+        for ifaceNum in self.costs:
+            costStr += "\t\t- Interface eth%s has cost %d." % (ifaceNum, self.costs[ifaceNum])
+        for i, area in enumerate(self.areas):
+                log("\t\t- Network %s (belonging to area %s) added to OSPF." % (self.networks[i], area))
 
 class BGP(Zebra):
-    def __init__(self, device, asNum, neighborIp, neighborAsNum, redistribute = []):
+    def __init__(self, device, asNum, neighborName2iface, redistribute = []):
         super(BGP, self).__init__(device)
 
         self.asNum = asNum
-        self.neighbors = {neighborIp: neighborAsNum}
+        self.neighbors = [neighborName2iface]
         self.redistribute = redistribute
     
+    def parseNeighbor(self, neighborName2iface):
+        name, iface = neighborName2iface.split("|")
+        otherDevice = device.lab.get(name)
+
+        ip = otherDevice.getInterfaceByNum(iface).getIp()
+        asNum = otherDevice.getServiceByType(BGP).asNum
+
+        return ip, asNum
+
     def getNeighbors(self):
         neighStr = ""
 
-        for neighborIp in self.neighbors:
-            isValidIP(neighborIp)
-            neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s\n" % (neighborIp, self.neighbors[neighborIp], neighborIp, self.neighbors[neighborIp])
+        for neighborName2iface in self.neighbors:
+            ip, asNum = self.parseNeighbor(neighborName2iface)
+            isValidIP(ip)
+            neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s\n" % (ip, asNum, ip, asNum)
 
         return neighStr
 
     def dump(self, startupFile):
-        if not os.path.exists(self.device.name + "/etc/quagga/bgpd.conf"):
-            super(BGP, self).dump(startupFile)
+        super(BGP, self).dump(startupFile)
 
-            self.addDaemon("bgpd")
+        self.addDaemon("bgpd")
 
-            with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
-                redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
-                log("\t- Adding BGP daemon in Zebra/Quagga.")
+        with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
+            redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
+            bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
 
-                bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
+        log("\t- Adding BGP daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
 
 #####################
 ## GENERIC CLASSES ##
