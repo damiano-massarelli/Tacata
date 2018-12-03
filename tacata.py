@@ -417,7 +417,7 @@ class Nameserver(object):
 
 class Zebra(object):
     # redistribuible routes
-    REDISTRIBUIBLE = {"connected", "rip", "ospf", "bgp"}
+    REDISTRIBUIBLE = {"connected", "rip", "ospf", "bgp", "kernel"}
 
     def __init__(self, device):
         self.device = device
