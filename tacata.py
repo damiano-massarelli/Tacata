@@ -43,15 +43,16 @@ enable password zebra
 !
 log file /var/log/zebra/zebra.log"""
 
-NETWORKS_PLACEHOLDER = "! Networks"
 RIP_CONF = """!
 hostname ripd
 password zebra
 enable password zebra
 !
 router rip
+! Redistribute
 %s
-""" + NETWORKS_PLACEHOLDER + """
+! Networks
+%s
 !
 log file /var/log/zebra/ripd.log"""
 
@@ -64,16 +65,19 @@ enable password zebra
 %s
 !
 router ospf
-!
+! Redistribute
 %s
-""" + NETWORKS_PLACEHOLDER + """
+! Networks
+%s
 !
 log file /var/log/zebra/ospfd.log"""
 
 BGP_CONF = """!
 router bgp %s
-neighbor %s remote-as %s
-neighbor %s description Router %s
+! Redistribute
+%s
+! Neighbors
+%s
 """
 
 #######################
@@ -192,7 +196,14 @@ def _rip(params, currentState = {}):
 
     currLab = currentState["currLab"]
     currDevice = currLab.get(deviceName)
-    currDevice.services.append(Rip(currDevice, network, redistribute))
+
+    ripService = currDevice.getServiceByType(Rip)
+    # check whether a rip service already exists
+    if ripService is None:
+        currDevice.services.append(Rip(currDevice, [network], redistribute))
+    else:
+        ripService.networks.append(network)
+        ripService.redistribute.extend(redistribute)
 
 def _ospf(params, currentState = {}):
     # Split matched params on , and spaces
@@ -205,7 +216,47 @@ def _ospf(params, currentState = {}):
 
     currLab = currentState["currLab"]
     currDevice = currLab.get(deviceName)
-    currDevice.services.append(OSPF(currDevice, network, area, redistribute))
+
+    ospfService = currDevice.getServiceByType(OSPF)
+    # check whether an ospf service already exists
+    if ospfService is None:
+        currDevice.services.append(OSPF(currDevice, [network], [area], redistribute))
+    else:
+        ospfService.areas.append(area)
+        ospfService.networks.append(network)
+        ospfService.redistribute.extend(redistribute)
+
+def _ospf_cost(cost, currentState = {}):
+    currInterfaceIndex = currentState["currInterface"].index
+    currDevice = currentState["currDevice"]
+    ospfService = currDevice.getServiceByType(OSPF)
+
+    # check whether an ospf service already exists
+    if ospfService is None:
+        ospfService = OSPF(currDevice)
+        currDevice.services.append(ospfService)
+    
+    ospfService.costs[currInterfaceIndex] = int(cost)
+
+def _bgp(params, currentState = {}):
+    # Split matched params on , and spaces
+    splittedParams = re.split(r'[,\s]+', params)
+
+    deviceName = splittedParams.pop(0)
+    asNum = splittedParams.pop(0)
+    neighborIp = splittedParams.pop(0)
+    neighborAsNum = splittedParams.pop(0)
+    redistribute = splittedParams
+
+    currLab = currentState["currLab"]
+    currDevice = currLab.get(deviceName)
+
+    bgpService = currDevice.getServiceByType(BGP)
+    # check whether an bgp service already exists
+    if bgpService is None:
+        currDevice.services.append(BGP(currDevice, asNum, neighborIp, neighborAsNum, redistribute))
+    else:
+        bgpService.neighbors[neighborIp] = neighborAsNum
 
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
@@ -217,8 +268,8 @@ names2commands = {
     "^dns\\((.+)\s?,\s?(.+),\s?(.+),\s?(.+)\\)$": _dns,
     "^rip(?:\\()(.+)+(?:\\))$": _rip,
     "^ospf(?:\\()(.+)+(?:\\))$": _ospf,
-    #"^ospf_cost\\((.+)\\)$": _ospf_cost,
-    #"^bgp(?:\\()(.+)+(?:\\))$": _bgp,
+    "^ospf_cost\\((.+)\\)$": _ospf_cost,
+    "^bgp(?:\\()(.+)+(?:\\))$": _bgp
 }
 
 ##############
@@ -380,11 +431,11 @@ class Zebra(object):
 
     def buildRedistributeString(self, redistribute):
         redistributeString = ""
-        for red in redistribute:
+        for red in set(redistribute):
             if red not in self.REDISTRIBUIBLE:
                 raise Exception("Cannot redistribute `%s` use one of: %s." % (red, list(self.REDISTRIBUIBLE)))
 
-            redistributeString += "redistribute %s" % red
+            redistributeString += "redistribute %s\n" % red
 
         return redistributeString
 
@@ -406,11 +457,19 @@ class Zebra(object):
             self.addDaemon("zebra")
 
 class Rip(Zebra):
-    def __init__(self, device, network, redistribute):
+    def __init__(self, device, networks = [], redistribute = []):
         super(Rip, self).__init__(device)
 
-        self.network = network
+        self.networks = networks
         self.redistribute = redistribute
+
+    def getNetworks(self):
+        networksStr = ""
+        for network in self.networks:
+            isValidIP(network)
+            networksStr += "network %s\n" % network
+
+        return networksStr
 
     def dump(self, startupFile):
         if not os.path.exists(self.device.name + "/etc/quagga/ripd.conf"):
@@ -420,27 +479,43 @@ class Rip(Zebra):
 
             with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
                 redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
-                log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
+                log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.networks, self.redistribute))
 
-                ripFile.write(RIP_CONF % (redistributeString))
-
-        with open(self.device.name + "/etc/quagga/ripd.conf", "r+") as ripFile:
-            isValidIP(self.network)
-
-            fileContent = ripFile.read()
-            fileContent = fileContent.replace(NETWORKS_PLACEHOLDER, NETWORKS_PLACEHOLDER + "\n" + ("network %s" % (self.network)))
-            ripFile.seek(0, 0)
-            ripFile.write(fileContent)
+                ripFile.write(RIP_CONF % (redistributeString, self.getNetworks()))
 
 class OSPF(Zebra):
-    def __init__(self, device, network, area, redistribute):
+    def __init__(self, device, networks = [], areas = [], redistribute = []):
         super(OSPF, self).__init__(device)
 
-        self.network = network
-        self.area = area
+        self.networks = networks
+        self.areas = areas
         self.redistribute = redistribute
+        self.costs = {} # interface -> cost
+
+    def getCosts(self):
+        costStr = ""
+        for ifaceNum in self.costs:
+            costStr += "interface eth%s\nospf cost %d" % (ifaceNum, self.costs[ifaceNum])
+
+        return costStr
+
+    def getNetworksAndAreas(self):
+        netAndAreas = ""
+        for i, area in enumerate(self.areas):
+            isValidIP(self.networks[i])
+            isValidIP(area)
+            netAndAreas += "network %s area %s\n" % (self.networks[i], area)
+        
+        stubs = set(self.areas) - {"0.0.0.0"} # 0.0.0.0 should not be added to stub areas
+        for stub in stubs:
+            netAndAreas += "area %s stub\n" % stub
+
+        return netAndAreas
 
     def dump(self, startupFile):
+        if self.networks == []:
+            raise Exception("Cost specified but ospf not configured for device %s" % self.device.name)
+
         if not os.path.exists(self.device.name + "/etc/quagga/ospfd.conf"):
             super(OSPF, self).dump(startupFile)
 
@@ -448,22 +523,38 @@ class OSPF(Zebra):
 
             with open(self.device.name + "/etc/quagga/ospfd.conf", "w") as ospfFile:
                 redistributeString = super(OSPF, self).buildRedistributeString(self.redistribute)
-                log("\t- Adding OSPF daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
+                log("\t- Adding OSPF daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.networks, self.redistribute))
 
-                ospfFile.write(OSPF_CONF % ("", redistributeString))
-
-        with open(self.device.name + "/etc/quagga/ospfd.conf", "r+") as ospfFile:
-            isValidIP(self.network)
-            isValidIP(self.area)
-
-            fileContent = ospfFile.read()
-            fileContent = fileContent.replace(NETWORKS_PLACEHOLDER, NETWORKS_PLACEHOLDER + "\n" + ("network %s area %s" % (self.network, self.area)))
-            ospfFile.seek(0, 0)
-            ospfFile.write(fileContent)
+                ospfFile.write(OSPF_CONF % (self.getCosts(), redistributeString, self.getNetworksAndAreas()))
 
 class BGP(Zebra):
-    def __init__(self, device, network, redistribute):
+    def __init__(self, device, asNum, neighborIp, neighborAsNum, redistribute = []):
         super(BGP, self).__init__(device)
+
+        self.asNum = asNum
+        self.neighbors = {neighborIp: neighborAsNum}
+        self.redistribute = redistribute
+    
+    def getNeighbors(self):
+        neighStr = ""
+
+        for neighborIp in self.neighbors:
+            isValidIP(neighborIp)
+            neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s\n" % (neighborIp, self.neighbors[neighborIp], neighborIp, self.neighbors[neighborIp])
+
+        return neighStr
+
+    def dump(self, startupFile):
+        if not os.path.exists(self.device.name + "/etc/quagga/bgpd.conf"):
+            super(BGP, self).dump(startupFile)
+
+            self.addDaemon("bgpd")
+
+            with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
+                redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
+                log("\t- Adding BGP daemon in Zebra/Quagga.")
+
+                bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
 
 #####################
 ## GENERIC CLASSES ##
