@@ -72,12 +72,25 @@ router ospf
 log file /var/log/zebra/ospfd.log"""
 
 BGP_CONF = """!
+hostname bgpd
+password zebra
+enable password zebra
+!
 router bgp %s
 ! Redistribute
 %s
 ! Neighbors
 %s
-"""
+!
+log file /var/log/zebra/bgpd.log
+!
+debug bgp
+debug bgp events
+debug bgp filters
+debug bgp fsm
+debug bgp keepalives
+debug bgp updates 
+!"""
 
 #######################
 ## UTILITY FUNCTIONS ##
@@ -478,9 +491,11 @@ class Rip(Zebra):
             redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
             ripFile.write(RIP_CONF % (redistributeString, self.getNetworks()))
 
-        log("\t- Adding RIPv2 daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
+        log("\t- Adding RIP daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
         for network in self.networks:
-                log("\t\t- Network %s added to RIPv2." % network)
+                log("\t\t- Network %s added to RIP." % network)
+
+        finalTodos.append("- Complete the RIP ripd.conf configuration file of device `%s` (if required)." % self.device.name)
 
 class OSPF(Zebra):
     def __init__(self, device, networks = [], areas = [], redistribute = []):
@@ -529,6 +544,8 @@ class OSPF(Zebra):
         for i, area in enumerate(self.areas):
                 log("\t\t- Network %s (belonging to area %s) added to OSPF." % (self.networks[i], area))
 
+        finalTodos.append("- Complete the OSPF ospfd.conf configuration file of device `%s` (if required)." % self.device.name)
+
 class BGP(Zebra):
     def __init__(self, device, asNum, neighborName2iface, redistribute = []):
         super(BGP, self).__init__(device)
@@ -539,7 +556,7 @@ class BGP(Zebra):
     
     def parseNeighbor(self, neighborName2iface):
         name, iface = neighborName2iface.split("|")
-        otherDevice = device.lab.get(name)
+        otherDevice = self.device.lab.get(name)
 
         ip = otherDevice.getInterfaceByNum(iface).getIp()
         asNum = otherDevice.getServiceByType(BGP).asNum
@@ -554,6 +571,8 @@ class BGP(Zebra):
             isValidIP(ip)
             neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s\n" % (ip, asNum, ip, asNum)
 
+            log("\t\t- Adding neighbor %s (with AS Number %s)." % (ip, asNum))
+
         return neighStr
 
     def dump(self, startupFile):
@@ -561,11 +580,13 @@ class BGP(Zebra):
 
         self.addDaemon("bgpd")
 
+        log("\t- Adding BGP daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
+        
         with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
             redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
             bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
 
-        log("\t- Adding BGP daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
+        finalTodos.append("- Complete the BGP bgpd.conf configuration file of device `%s` (if required)." % self.device.name)
 
 #####################
 ## GENERIC CLASSES ##
