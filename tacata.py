@@ -8,8 +8,9 @@ import socket
 import struct
 import datetime
 import argparse
+import traceback
 
-# Args from the CLI 
+# Args from the CLI
 args = None
 # Final msgs to display to user (ex. Complete Load Balancing, ...)
 finalTodos = []
@@ -42,6 +43,7 @@ enable password zebra
 !
 log file /var/log/zebra/zebra.log"""
 
+NETWORKS_PLACEHOLDER = "! Networks"
 RIP_CONF = """!
 hostname ripd
 password zebra
@@ -49,9 +51,30 @@ enable password zebra
 !
 router rip
 %s
-network %s
+""" + NETWORKS_PLACEHOLDER + """
 !
 log file /var/log/zebra/ripd.log"""
+
+
+OSPF_CONF = """!
+hostname ospfd
+password zebra
+enable password zebra
+! Costs Section (can be empty)
+%s
+!
+router ospf
+!
+%s
+""" + NETWORKS_PLACEHOLDER + """
+!
+log file /var/log/zebra/ospfd.log"""
+
+BGP_CONF = """!
+router bgp %s
+neighbor %s remote-as %s
+neighbor %s description Router %s
+"""
 
 #######################
 ## UTILITY FUNCTIONS ##
@@ -61,7 +84,7 @@ def log(line):
         print line
 
 def isValidIP(address):
-    parts = address.split('/')[0].split(".")
+    parts = address.split('/')[0].split(".") if '/' in address else address.split('.')
 
     if len(parts) != 4:
         raise Exception("Invalid ip %s." % address)
@@ -79,7 +102,7 @@ def getNetmaskInfo(ip):
         netmaskLength = int(ip.split("/")[1])
     except Exception:
         raise Exception("Unable to get netmask information from `%s`. Ip addresses should be x.y.z.w/n." % ip)
-    
+
     netmask = ctypes.c_uint32(0xFFFFFFFF) # 32 bits. using ctypes guarantees that shifts do not overflow
     netmask.value <<= (32 - netmaskLength) # obtain actual netmask
 
@@ -171,6 +194,19 @@ def _rip(params, currentState = {}):
     currDevice = currLab.get(deviceName)
     currDevice.services.append(Rip(currDevice, network, redistribute))
 
+def _ospf(params, currentState = {}):
+    # Split matched params on , and spaces
+    splittedParams = re.split(r'[,\s]+', params)
+
+    deviceName = splittedParams.pop(0)
+    network = splittedParams.pop(0)
+    area = splittedParams.pop(0)
+    redistribute = splittedParams
+
+    currLab = currentState["currLab"]
+    currDevice = currLab.get(deviceName)
+    currDevice.services.append(OSPF(currDevice, network, area, redistribute))
+
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
     "^to\\((.+)\s?,\s?(.+)\\)$": _to,
@@ -179,7 +215,10 @@ names2commands = {
     "^has_name\\((.+)\\)$": _has_name,
     "^ns_resolv\\((.+)\s?,\s?(.+)\\)$": _ns_resolv,
     "^dns\\((.+)\s?,\s?(.+),\s?(.+),\s?(.+)\\)$": _dns,
-    "^rip(?:\\()(.+)+(?:\\))$": _rip
+    "^rip(?:\\()(.+)+(?:\\))$": _rip,
+    "^ospf(?:\\()(.+)+(?:\\))$": _ospf,
+    #"^ospf_cost\\((.+)\\)$": _ospf_cost,
+    #"^bgp(?:\\()(.+)+(?:\\))$": _bgp,
 }
 
 ##############
@@ -339,6 +378,16 @@ class Zebra(object):
         zebraServices = self.device.getServicesByType(Zebra)
         return zebraServices != [] and zebraServices[0] is self
 
+    def buildRedistributeString(self, redistribute):
+        redistributeString = ""
+        for red in redistribute:
+            if red not in self.REDISTRIBUIBLE:
+                raise Exception("Cannot redistribute `%s` use one of: %s." % (red, list(self.REDISTRIBUIBLE)))
+
+            redistributeString += "redistribute %s" % red
+
+        return redistributeString
+
     def dumpZebraConf(self):
         with open(self.device.name + "/etc/quagga/zebra.conf", "w") as zebraFile:
             zebraFile.write(ZEBRA_CONF)
@@ -364,23 +413,57 @@ class Rip(Zebra):
         self.redistribute = redistribute
 
     def dump(self, startupFile):
-        super(Rip, self).dump(startupFile)
+        if not os.path.exists(self.device.name + "/etc/quagga/ripd.conf"):
+            super(Rip, self).dump(startupFile)
 
-        isValidIP(self.network)
+            self.addDaemon("ripd")
 
-        self.addDaemon("ripd")
+            with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
+                redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
+                log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
 
-        with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
-            redistributeString = ""
-            for red in self.redistribute:
-                if red not in Zebra.REDISTRIBUIBLE:
-                    raise Exception("Cannot redistribute `%s` use one of: %s." % (red, list(Zebra.REDISTRIBUIBLE)))
+                ripFile.write(RIP_CONF % (redistributeString))
 
-                redistributeString += "redistribute %s\n" % red
+        with open(self.device.name + "/etc/quagga/ripd.conf", "r+") as ripFile:
+            isValidIP(self.network)
 
-            log("\t- Adding RIPv2 daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
+            fileContent = ripFile.read()
+            fileContent = fileContent.replace(NETWORKS_PLACEHOLDER, NETWORKS_PLACEHOLDER + "\n" + ("network %s" % (self.network)))
+            ripFile.seek(0, 0)
+            ripFile.write(fileContent)
 
-            ripFile.write(RIP_CONF % (redistributeString, self.network))
+class OSPF(Zebra):
+    def __init__(self, device, network, area, redistribute):
+        super(OSPF, self).__init__(device)
+
+        self.network = network
+        self.area = area
+        self.redistribute = redistribute
+
+    def dump(self, startupFile):
+        if not os.path.exists(self.device.name + "/etc/quagga/ospfd.conf"):
+            super(OSPF, self).dump(startupFile)
+
+            self.addDaemon("ospfd")
+
+            with open(self.device.name + "/etc/quagga/ospfd.conf", "w") as ospfFile:
+                redistributeString = super(OSPF, self).buildRedistributeString(self.redistribute)
+                log("\t- Adding OSPF daemon in Zebra/Quagga for network %s (redistributes: %s)." % (self.network, self.redistribute))
+
+                ospfFile.write(OSPF_CONF % ("", redistributeString))
+
+        with open(self.device.name + "/etc/quagga/ospfd.conf", "r+") as ospfFile:
+            isValidIP(self.network)
+            isValidIP(self.area)
+
+            fileContent = ospfFile.read()
+            fileContent = fileContent.replace(NETWORKS_PLACEHOLDER, NETWORKS_PLACEHOLDER + "\n" + ("network %s area %s" % (self.network, self.area)))
+            ospfFile.seek(0, 0)
+            ospfFile.write(fileContent)
+
+class BGP(Zebra):
+    def __init__(self, device, network, redistribute):
+        super(BGP, self).__init__(device)
 
 #####################
 ## GENERIC CLASSES ##
@@ -514,7 +597,7 @@ class NameserverTree(object):
 
     def addDNSDevice(self, name, dnsType, device, ifaceNum):
         iface = device.getInterfaceByNum(ifaceNum)
-        
+
         if name == ROOT_NAME or name == ROOT_FANCY_NAME: # This is a root NS, add it to the roots
             self.root.nsDevices2types2ifaces.append((device, dnsType, iface))
             return
@@ -713,7 +796,7 @@ def parseDeviceAndInterface(declaration):
 
     if matches is None or len(matches.groups()) != 3:
         raise Exception("Wrong interface declaration. Should be <device>[<interface_number>]=<lan>.")
-    
+
     return matches.groups()
 
 def parseCommands(commandString, **kwargs):
@@ -776,14 +859,18 @@ def parse():
                     currLan = currLab.getOrNewLan(currLanName)
 
                 parseCommands(commands, currDevice = currDevice, currInterface = currInterface, currLab = currLab)
-                
+
                 # after commands are parsed so that ip is set on interface
                 if currLan is not None:
                     currLan.addInterface(currInterface)
-        
+
         currLab.dump()
     except Exception as e:
         print "Error at line %d: %s" % (currentLine, str(e))
+
+        if args.testing:
+            traceback.print_exc(e)
+
         exit()
 
 if __name__ == '__main__':
@@ -792,6 +879,7 @@ if __name__ == '__main__':
     argParser.add_argument("-v", "--verbose", help="Enables output verbosity.", action="store_true")
     argParser.add_argument("-r", "--run", help="Runs the created lab.", action="store_true")
     argParser.add_argument("-f", "--force", help="Deletes previous labs if any.", action="store_true")
+    argParser.add_argument("-t", "--testing", help="Runs in debugging mode", action="store_true")
     args = argParser.parse_args()
 
     parse()
