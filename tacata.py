@@ -89,7 +89,7 @@ debug bgp events
 debug bgp filters
 debug bgp fsm
 debug bgp keepalives
-debug bgp updates 
+debug bgp updates
 !"""
 
 #######################
@@ -245,9 +245,9 @@ def _ospf_cost(cost, currentState = {}):
 
     # check whether an ospf service already exists
     if ospfService is None:
-        ospfService = OSPF(currDevice)
+        ospfService = OSPF(currDevice, [], [], [])
         currDevice.services.append(ospfService)
-    
+
     ospfService.costs[currInterfaceIndex] = int(cost)
 
 def _bgp(params, currentState = {}):
@@ -519,7 +519,7 @@ class OSPF(Zebra):
             isValidIP(self.networks[i])
             isValidIP(area)
             netAndAreas += "network %s area %s\n" % (self.networks[i], area)
-        
+
         stubs = set(self.areas) - {"0.0.0.0"} # 0.0.0.0 should not be added to stub areas
         for stub in stubs:
             netAndAreas += "area %s stub\n" % stub
@@ -540,9 +540,9 @@ class OSPF(Zebra):
 
         log("\t- Adding OSPF daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
         for ifaceNum in self.costs:
-            costStr += "\t\t- Interface eth%s has cost %d." % (ifaceNum, self.costs[ifaceNum])
+            log("\t\t- Interface eth%s has cost %d." % (ifaceNum, self.costs[ifaceNum]))
         for i, area in enumerate(self.areas):
-                log("\t\t- Network %s (belonging to area %s) added to OSPF." % (self.networks[i], area))
+            log("\t\t- Network %s (belonging to area %s) added to OSPF." % (self.networks[i], area))
 
         finalTodos.append("- Complete the OSPF ospfd.conf configuration file of device `%s` (if required)." % self.device.name)
 
@@ -553,7 +553,7 @@ class BGP(Zebra):
         self.asNum = asNum
         self.neighbors = [neighborName2iface]
         self.redistribute = redistribute
-    
+
     def parseNeighbor(self, neighborName2iface):
         name, iface = neighborName2iface.split("|")
         otherDevice = self.device.lab.get(name)
@@ -581,7 +581,7 @@ class BGP(Zebra):
         self.addDaemon("bgpd")
 
         log("\t- Adding BGP daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
-        
+
         with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
             redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
             bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
