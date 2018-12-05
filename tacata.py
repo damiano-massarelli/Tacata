@@ -232,11 +232,11 @@ def _ospf(params, currentState = {}):
     ospfService = currDevice.getServiceByType(OSPF)
     # check whether an ospf service already exists
     if ospfService is None:
-        currDevice.services.append(OSPF(currDevice, [network], [area], redistribute))
-    else:
-        ospfService.areas.append(area)
-        ospfService.networks.append(network)
-        ospfService.redistribute.extend(redistribute)
+        ospfService = OSPF(currDevice, [])
+        currDevice.services.append(ospfService)
+
+    ospfService.networks2areas[network] = area
+    ospfService.redistribute.extend(redistribute)
 
 def _ospf_cost(cost, currentState = {}):
     currInterfaceIndex = currentState["currInterface"].index
@@ -245,7 +245,7 @@ def _ospf_cost(cost, currentState = {}):
 
     # check whether an ospf service already exists
     if ospfService is None:
-        ospfService = OSPF(currDevice, [], [], [])
+        ospfService = OSPF(currDevice, [])
         currDevice.services.append(ospfService)
 
     ospfService.costs[currInterfaceIndex] = int(cost)
@@ -487,6 +487,8 @@ class Rip(Zebra):
 
         self.addDaemon("ripd")
 
+        self.networks = set(self.networks) # Removes duplicated networks
+
         with open(self.device.name + "/etc/quagga/ripd.conf", "w") as ripFile:
             redistributeString = super(Rip, self).buildRedistributeString(self.redistribute)
             ripFile.write(RIP_CONF % (redistributeString, self.getNetworks()))
@@ -498,36 +500,42 @@ class Rip(Zebra):
         finalTodos.append("- Complete the RIP ripd.conf configuration file of device `%s` (if required)." % self.device.name)
 
 class OSPF(Zebra):
-    def __init__(self, device, networks = [], areas = [], redistribute = []):
+    def __init__(self, device, redistribute = []):
         super(OSPF, self).__init__(device)
 
-        self.networks = networks
-        self.areas = areas
+        self.networks2areas = dict()
         self.redistribute = redistribute
         self.costs = {} # interface -> cost
 
     def getCosts(self):
         costStr = ""
         for ifaceNum in self.costs:
-            costStr += "interface eth%s\nospf cost %d" % (ifaceNum, self.costs[ifaceNum])
+            costStr += "interface eth%s\nospf cost %d\n" % (ifaceNum, self.costs[ifaceNum])
 
         return costStr
 
     def getNetworksAndAreas(self):
         netAndAreas = ""
-        for i, area in enumerate(self.areas):
-            isValidIP(self.networks[i])
-            isValidIP(area)
-            netAndAreas += "network %s area %s\n" % (self.networks[i], area)
 
-        stubs = set(self.areas) - {"0.0.0.0"} # 0.0.0.0 should not be added to stub areas
+        areasSet = []
+
+        for network in self.networks2areas:
+            area = self.networks2areas[network]
+
+            isValidIP(network)
+            isValidIP(area)
+            netAndAreas += "network %s area %s\n" % (network, area)
+
+            areasSet.append(area)
+
+        stubs = set(areasSet) - {"0.0.0.0"} # 0.0.0.0 should not be added to stub areas
         for stub in stubs:
             netAndAreas += "area %s stub\n" % stub
 
         return netAndAreas
 
     def dump(self, startupFile):
-        if self.networks == []:
+        if self.networks2areas == []:
             raise Exception("Cost specified but OSPF not configured for device `%s`." % self.device.name)
 
         super(OSPF, self).dump(startupFile)
@@ -541,8 +549,8 @@ class OSPF(Zebra):
         log("\t- Adding OSPF daemon in Zebra/Quagga (redistributes: %s)..." % self.redistribute)
         for ifaceNum in self.costs:
             log("\t\t- Interface eth%s has cost %d." % (ifaceNum, self.costs[ifaceNum]))
-        for i, area in enumerate(self.areas):
-            log("\t\t- Network %s (belonging to area %s) added to OSPF." % (self.networks[i], area))
+        for network in self.networks2areas:
+            log("\t\t- Network %s (belonging to area %s) added to OSPF." % (network, self.networks2areas[network]))
 
         finalTodos.append("- Complete the OSPF ospfd.conf configuration file of device `%s` (if required)." % self.device.name)
 
@@ -561,15 +569,15 @@ class BGP(Zebra):
         ip = otherDevice.getInterfaceByNum(iface).getIp()
         asNum = otherDevice.getServiceByType(BGP).asNum
 
-        return ip, asNum
+        return ip, name, asNum
 
     def getNeighbors(self):
         neighStr = ""
 
         for neighborName2iface in self.neighbors:
-            ip, asNum = self.parseNeighbor(neighborName2iface)
+            ip, neighborName, asNum = self.parseNeighbor(neighborName2iface)
             isValidIP(ip)
-            neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s\n" % (ip, asNum, ip, asNum)
+            neighStr += "neighbor %s remote-as %s\nneighbor %s description Router %s of AS%s\n" % (ip, asNum, ip, neighborName, asNum)
 
             log("\t\t- Adding neighbor %s (with AS Number %s)." % (ip, asNum))
 
@@ -848,7 +856,7 @@ class Lan(object):
             self.netmask = ifaceNetmask
             self.prefix = ifacePrefix
         if ifaceNetmask != self.netmask or ifacePrefix != self.prefix:
-            raise Exception("Interface `%s` in LAN `%s` has different prefix!" % (iface, self.name))
+            raise Exception("Interface `%s` in LAN `%s` has different prefix!" % (iface.index, self.name))
 
         self.interfaces.append(iface)
 
@@ -915,7 +923,7 @@ class Lab(object):
 def parseDeviceAndInterface(declaration):
     if declaration == "":
         return None, None
-    matches = re.search("(.*)\\[(\d+)\\]=\"?(\w)\"?", declaration)
+    matches = re.search("(.*)\\[(\d+)\\]=\"?(\w+)\"?", declaration)
 
     if matches is None or len(matches.groups()) != 3:
         raise Exception("Wrong interface declaration. Should be <device>[<interface_number>]=<lan>.")
