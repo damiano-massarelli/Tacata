@@ -61,7 +61,7 @@ as10r1[2]="A20A10C2"		$ip(20.10.2.2/30)
 # route-map useAsBkp permit 10
 # set metric 10
 # !
-# route-map chooseMe metric 10
+# route-map chooseMe permit 10
 # set local-preference 200
 $bgp(as10r1, 10, as20r3|eth0)
 $bgp(as10r1, 10, as20r2|eth0)

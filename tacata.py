@@ -79,6 +79,8 @@ enable password zebra
 router bgp %s
 ! Redistribute
 %s
+! Announced Networks
+%s
 ! Neighbors
 %s
 !
@@ -263,11 +265,24 @@ def _bgp(params, currentState = {}):
     currDevice = currLab.get(deviceName)
 
     bgpService = currDevice.getServiceByType(BGP)
-    # check whether an bgp service already exists
+    # check whether a bgp service already exists
     if bgpService is None:
         currDevice.services.append(BGP(currDevice, asNum, neighborName2iface, redistribute))
     else:
         bgpService.neighbors.append(neighborName2iface)
+
+def _bgp_announce(deviceName, network, currentState = {}):
+    currLab = currentState["currLab"]
+    currDevice = currLab.get(deviceName)
+
+    isValidIP(network)
+
+    bgpService = currDevice.getServiceByType(BGP)
+    # check whether a bgp service already exists
+    if bgpService is None:
+        raise Exception("Cannot announce a BGP network if BGP is not declared on device `%s`." % currDevice.name)
+
+    bgpService.announcedNetworks.append(network)
 
 names2commands = {
     "^ip\\((.+)\\)$": _ip,
@@ -280,7 +295,8 @@ names2commands = {
     "^rip(?:\\()(.+)+(?:\\))$": _rip,
     "^ospf(?:\\()(.+)+(?:\\))$": _ospf,
     "^ospf_cost\\((.+)\\)$": _ospf_cost,
-    "^bgp(?:\\()(.+)+(?:\\))$": _bgp
+    "^bgp(?:\\()(.+)+(?:\\))$": _bgp,
+    "^bgp_announce\\((.+)\s?,\s?(.+)\\)$": _bgp_announce
 }
 
 ##############
@@ -561,6 +577,7 @@ class BGP(Zebra):
         self.asNum = asNum
         self.neighbors = [neighborName2iface]
         self.redistribute = redistribute
+        self.announcedNetworks = []
 
     def parseNeighbor(self, neighborName2iface):
         name, iface = neighborName2iface.split("|")
@@ -583,6 +600,14 @@ class BGP(Zebra):
 
         return neighStr
 
+    def getAnnouncedNetworks(self):
+        netStr = ""
+
+        for network in set(self.announcedNetworks):
+            netStr += "network %s\n" % network
+
+        return netStr
+
     def dump(self, startupFile):
         super(BGP, self).dump(startupFile)
 
@@ -592,7 +617,7 @@ class BGP(Zebra):
 
         with open(self.device.name + "/etc/quagga/bgpd.conf", "w") as bgpFile:
             redistributeString = super(BGP, self).buildRedistributeString(self.redistribute)
-            bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getNeighbors()))
+            bgpFile.write(BGP_CONF % (self.asNum, redistributeString, self.getAnnouncedNetworks(), self.getNeighbors()))
 
         finalTodos.append("- Complete the BGP bgpd.conf configuration file of device `%s` (if required)." % self.device.name)
 

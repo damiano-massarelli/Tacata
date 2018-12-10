@@ -37,7 +37,6 @@ as200r1[1]="A100A200C1"		$ip(100.200.1.2/30)
 # !
 # route-map dontChooseMe permit 10
 # set metric 50
-
 $bgp(as200r1, 200, as200r2|eth2)
 $bgp(as200r1, 200, as100r1|eth2)
 $rip(as200r1, 200.0.0.0/16, connected)
