@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import re
@@ -99,7 +99,7 @@ debug bgp updates
 #######################
 def log(line):
     if args.verbose:
-        print line
+        print(line)
 
 def isValidIP(address):
     parts = address.split('/')[0].split(".") if '/' in address else address.split('.')
@@ -898,7 +898,7 @@ class Lab(object):
             if args.force:
                 shutil.rmtree(self.labDir, ignore_errors = True)
             else:
-                print "A lab already exists in this directory. Use -f to force deletion."
+                print("A lab already exists in this directory. Use -f to force deletion.")
                 exit()
 
         os.mkdir(self.labDir)
@@ -941,9 +941,9 @@ class Lab(object):
         log("============ DUMPING NAMESERVER TREE ============")
         self.nameserverTree.dump()
 
-        print "================= DUMPING DONE! ================="
+        print("================= DUMPING DONE! =================")
         for i, todo in enumerate(finalTodos):
-            print "\t" + str(i + 1) + " " + todo
+            print("\t" + str(i + 1) + " " + todo)
 
 def parseDeviceAndInterface(declaration):
     if declaration == "":
@@ -977,13 +977,13 @@ def launch_lab():
         os.system("$NETKIT_HOME/lstart")
 
 def parse():
-    print "####################################################"
-    print "#                                                  #"
-    print "#              WELCOME TO TACATA                   #"
-    print "#    A lightweight Python Kathara lab generator    #"
-    print "#                                                  #"
-    print "####################################################"
-    print ""
+    print("####################################################")
+    print("#                                                  #")
+    print("#              WELCOME TO TACATA                   #")
+    print("#    A lightweight Python Kathara lab generator    #")
+    print("#                                                  #")
+    print("####################################################")
+    print("")
 
     currentLine = 0
     try:
@@ -1022,7 +1022,7 @@ def parse():
 
         currLab.dump()
     except Exception as e:
-        print "Error at line %d: %s" % (currentLine, str(e))
+        print("Error at line %d: %s" % (currentLine, str(e)))
 
         if args.testing:
             traceback.print_exc(e)
